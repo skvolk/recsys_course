@@ -62,7 +62,38 @@ def top_n_recommend(
     Returns:
         Список кортежей (movieId, avg_rating, rating_count, title).
     """
-    raise(NotImplementedError("Реализуйте функцию top_n_recommend"))
+    ratings_df, movies_df = load_data()
+    
+    movie_stats = ratings_df.groupby("movieId").agg(
+        avg_rating=("rating", "mean"),
+        rating_count=("rating", "count")
+    ).reset_index()
+    
+    popular_movies = movie_stats[movie_stats["rating_count"] >= min_ratings]
+    
+    popular_movies = popular_movies.sort_values(
+        by=["avg_rating", "rating_count"], 
+        ascending=[False, False]
+    )
+    
+    top_movies = popular_movies.head(n_recommendations)
+    
+    top_movies_with_titles = top_movies.merge(
+        movies_df[["movieId", "title"]], 
+        on="movieId", 
+        how="left"
+    )
+    
+    recommendations = []
+    for _, row in top_movies_with_titles.iterrows():
+        recommendations.append((
+            row["movieId"], 
+            row["avg_rating"], 
+            row["rating_count"], 
+            row["title"]
+        ))
+    
+    return recommendations
 
 
 def evaluate_rec_systems(
@@ -86,7 +117,25 @@ def evaluate_rec_systems(
     Returns:
         Словарь {'random_accuracy', 'popular_accuracy'}.
     """
-    raise(NotImplementedError("Реализуйте функцию evaluate_rec_systems"))
+    ratings_df, _ = load_data()
+    
+    user_history = ratings_df[ratings_df["userId"] == user_id]["movieId"].unique()
+    
+    random_recs = random_recommend(n_recommendations, seed=random_state)
+    
+    popular_recs_tuples = top_n_recommend(n_recommendations)
+    popular_recs = [rec[0] for rec in popular_recs_tuples]
+    
+    random_hits = set(random_recs) & set(user_history)
+    popular_hits = set(popular_recs) & set(user_history)
+    
+    random_accuracy = len(random_hits) / n_recommendations
+    popular_accuracy = len(popular_hits) / n_recommendations
+    
+    return {
+        "random_accuracy": random_accuracy,
+        "popular_accuracy": popular_accuracy
+    }
 
 
 if __name__ == "__main__":
