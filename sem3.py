@@ -30,7 +30,7 @@ class ContentRecommender:
         self.movies_df = movies_df.copy()
         self.movies_df["genres"] = self.movies_df["genres"].fillna("")
         vectorizer = CountVectorizer(
-            token_pattern=lambda s: s.split("|"), 
+            tokenizer=lambda s: s.split("|"), 
             lowercase=False
         )
         
