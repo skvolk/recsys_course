@@ -7,6 +7,7 @@
 
 import numpy as np
 from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 from utils import build_user_item_matrix, id_to_movie, load_data, print_user_rated_items
 
@@ -28,11 +29,24 @@ class ContentRecommender:
         _, movies_df = load_data()
         self.movies_df = movies_df.copy()
         self.movies_df["genres"] = self.movies_df["genres"].fillna("")
-        vectorizer = CountVectorizer(tokenizer=lambda s: s.split("|"), lowercase=False)
-        ###########################################################################
-        # TODO: Строим матрицу эмбеддингов для фильмов и сохраняем в self.embeddings                       
+        vectorizer = CountVectorizer(
+            token_pattern=lambda s: s.split("|"), 
+            lowercase=False
+        )
+        
+        genre_matrix = vectorizer.fit_transform(self.movies_df["genres"])
+  
+        max_movie_id = self.movies_df["movieId"].max()
+        n_genres = genre_matrix.shape[1]
 
-        ###########################################################################
+        self.embeddings = np.zeros((max_movie_id + 1, n_genres))
+
+        for idx, row in self.movies_df.iterrows():
+            movie_id = row["movieId"]
+            if movie_id <= max_movie_id:
+                self.embeddings[movie_id] = genre_matrix[idx].toarray().flatten()
+
+        self.genre_names = vectorizer.get_feature_names_out()
         
 
     def predict_rating(self, user_id: int, item_id: int, k: int = 5) -> float:
@@ -56,7 +70,57 @@ class ContentRecommender:
         Returns:
             float: предсказанный рейтинг
         """
-        raise NotImplementedError("Реализуйте функцию predict_rating")
+        if item_id >= len(self.embeddings):
+            return 0.0
+        
+        target_vec = self.embeddings[item_id]
+
+        if np.sum(target_vec) == 0:
+            return 0.0
+
+        user_ratings = self.ui_matrix[user_id]
+        rated_items = np.where(user_ratings > 0)[0]
+        
+        if len(rated_items) == 0:
+            return 0.0
+
+        rated_vectors = []
+        rated_scores = []
+        
+        for rated_item in rated_items:
+            if rated_item < len(self.embeddings):
+                vec = self.embeddings[rated_item]
+                if np.sum(vec) > 0:
+                    rated_vectors.append(vec)
+                    rated_scores.append(user_ratings[rated_item])
+        
+        if len(rated_vectors) == 0:
+            return 0.0
+        
+        rated_vectors = np.array(rated_vectors)
+        rated_scores = np.array(rated_scores)
+
+        target_vec_reshaped = target_vec.reshape(1, -1)
+        similarities = cosine_similarity(target_vec_reshaped, rated_vectors)[0]
+
+        top_k_indices = np.argsort(similarities)[::-1][:k]
+
+        top_similarities = similarities[top_k_indices]
+        top_ratings = rated_scores[top_k_indices]
+        
+        non_zero_mask = top_similarities > 0
+        if not np.any(non_zero_mask):
+            return 0.0
+        
+        sum_similarities = np.sum(top_similarities[non_zero_mask])
+        if sum_similarities == 0:
+            return 0.0
+        
+        predicted = np.sum(top_similarities[non_zero_mask] * top_ratings[non_zero_mask]) / sum_similarities
+        
+        predicted = np.clip(predicted, 0.0, 5.0)
+        
+        return float(predicted)
 
     def predict_items_for_user(
         self, user_id: int, k: int = 5, n_recommendations: int = 5
@@ -70,7 +134,47 @@ class ContentRecommender:
         4) Для всех фильмов, которые пользователь не оценил, считаем сходство с профилем.
         5) Сортируем по убыванию сходства и возвращаем top-n.
         """
-        raise NotImplementedError("Реализуйте функцию predict_items_for_user")
+        user_ratings = self.ui_matrix[user_id]
+        rated_items = np.where(user_ratings > 0)[0]
+        
+        if len(rated_items) == 0:
+            return []
+
+        user_profile = np.zeros(self.embeddings.shape[1])
+        total_weight = 0
+        
+        for item_id in rated_items:
+            if item_id < len(self.embeddings):
+                vec = self.embeddings[item_id]
+                if np.sum(vec) > 0:
+                    weight = user_ratings[item_id]
+                    user_profile += weight * vec
+                    total_weight += weight
+        
+        if total_weight == 0 or np.sum(user_profile) == 0:
+            return []
+
+        user_profile = user_profile / total_weight
+
+        all_items = np.arange(len(self.embeddings))
+        unrated_items = [item for item in all_items if item not in rated_items]
+        
+        item_scores = []
+        user_profile_reshaped = user_profile.reshape(1, -1)
+        
+        for item_id in unrated_items:
+            if item_id < len(self.embeddings):
+                item_vec = self.embeddings[item_id]
+                if np.sum(item_vec) > 0:
+                    item_vec_reshaped = item_vec.reshape(1, -1)
+                    sim = cosine_similarity(user_profile_reshaped, item_vec_reshaped)[0][0]
+                    if sim > 0:
+                        item_scores.append((int(item_id), sim))
+        
+        item_scores.sort(key=lambda x: x[1], reverse=True)
+        recommendations = [item_id for item_id, _ in item_scores[:n_recommendations]]
+        
+        return recommendations
 
 
 # Пример использования для дебага:
